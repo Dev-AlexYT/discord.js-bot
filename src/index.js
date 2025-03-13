@@ -1,53 +1,66 @@
-const fs = require('node:fs');
-const path = require('node:path');
-const { Client, Collection, Events, GatewayIntentBits } = require('discord.js');
-const { token } = require('../../config.json');
+const { Client, GatewayIntentBits, Partials } = require(`discord.js`);
+const client = new Client({ intents: ['GuildMessages', 'MessageContent', 'DirectMessages', 'GuildMembers', 'Guilds'], }); //Guilds, GuildMembers : REQUIRED 
+const chalk = require('chalk');
+const config = require('../config.json');
+const fs = require('fs');
+const { eventsHandler } = require('./functions/handlers/handelEvents');
+const path = require('path');
+const { checkMissingIntents } = require('./functions/handlers/requiredIntents');
+const { antiCrash } = require('./functions/handlers/antiCrash');
+antiCrash();
+require('./functions/handlers/watchFolders');
+const adminFolderPath = path.join(__dirname, '../admin');
+const dashboardFilePath = path.join(adminFolderPath, 'dashboard.js');
 
-const client = new Client({ intents: [GatewayIntentBits.Guilds] });
+const eventsPath = './events';
 
-client.on('ready', async (c) => {
-    await console.log(`${c.user.username} is now online!`)
-});
+const errorsDir = path.join(__dirname, '../../../errors');
 
-client.commands = new Collection();
-
-const foldersPath = path.join(__dirname, 'commands');
-const commandFolders = fs.readdirSync(foldersPath);
-
-for (const folder of commandFolders) {
-	const commandsPath = path.join(foldersPath, folder);
-	const commandFiles = fs.readdirSync(commandsPath).filter(file => file.endsWith('.js'));
-	for (const file of commandFiles) {
-		const filePath = path.join(commandsPath, file);
-		const command = require(filePath);
-		if ('data' in command && 'execute' in command) {
-			client.commands.set(command.data.name, command);
-		} else {
-			console.log(`[WARNING] The command at ${filePath} is missing a required "data" or "execute" property.`);
-		}
-	}
+function ensureErrorDirectoryExists() {
+    if (!fs.existsSync(errorsDir)) {
+        fs.mkdirSync(errorsDir);
+    }
 }
 
-client.on(Events.InteractionCreate, async interaction => {
-	if (!interaction.isChatInputCommand()) return;
+function logErrorToFile(error) {
+    ensureErrorDirectoryExists();
 
-	const command = interaction.client.commands.get(interaction.commandName);
+    // Convert the error object into a string, including the stack trace
+    const errorMessage = `${error.name}: ${error.message}\n${error.stack}`;
 
-	if (!command) {
-		console.error(`No command matching ${interaction.commandName} was found.`);
-		return;
-	}
+    const fileName = `${new Date().toISOString().replace(/:/g, '-')}.txt`;
+    const filePath = path.join(errorsDir, fileName);
 
-	try {
-		await command.execute(interaction);
-	} catch (error) {
-		console.error(error);
-		if (interaction.replied || interaction.deferred) {
-			await interaction.followUp({ content: 'There was an error while executing this command!', flags: MessageFlags.Ephemeral });
-		} else {
-			await interaction.reply({ content: 'There was an error while executing this command!', flags: MessageFlags.Ephemeral });
-		}
-	}
-});
+    fs.writeFileSync(filePath, errorMessage, 'utf8');
+}
 
-client.login(token)
+
+(async () => {
+    try {
+        await client.login(config.bot.token);
+        console.log(chalk.green.bold('SUCCESS: ') + 'Bot logged in successfully!');
+        if (fs.existsSync(adminFolderPath) && fs.existsSync(dashboardFilePath)) {
+            require(dashboardFilePath);
+            console.log(chalk.green(chalk.green.bold('SUCCESS: Admin dashboard loaded successfully!.')));
+
+        }
+        require('./functions/handlers/functionHandler');
+
+        await eventsHandler(client, path.join(__dirname, eventsPath));
+        checkMissingIntents(client);
+    } catch (error) {
+        if (error.message === "An invalid token was provided.") {
+            console.error(chalk.red.bold('ERROR: ') + 'The token provided for the Discord bot is invalid. Please check your configuration.');
+            logErrorToFile(error)
+        } else {
+            console.error(chalk.red.bold('ERROR: ') + 'Failed to log in:', error);
+            logErrorToFile(error)
+        }
+    }
+})();
+
+module.exports = client;
+
+
+
+//* You can start writing your custom bot logic from here. Add new features, commands, or events!
